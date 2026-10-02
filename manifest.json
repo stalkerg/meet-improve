@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Meet Improve",
+  "version": "0.5.0",
+  "description": "Выделение текста и перевод субтитров Google Meet через локальный Codex (ChatGPT).",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle",
+      "js": [
+        "captions.js",
+        "content.js"
+      ]
+    }
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxgAZY6KPtCqwcE+e0M0Mf0eaSCorPFjIuQ7i1Mn1jodnjKwYcMJBU0aTLY4lYYMwee0i5/sLc4xpqpEIPpMBpQYX8YIKC1OO8CDC9OcvxPwq746mCssbha+PUiRtKj+2q5OZAt3fJd6ADHk0gGTOyjybYTzlN+j2ELBQdBxnL0zFgIFjKejwDaTiEY2F6rVwvNDE82yG6ybSraYFLnHMa+PDCc7BUZFYNBZ3rYR3zkUvqKfx/qqBfaLgcJH6GADuI2oGTuYsQQspLlvFCo5GjJiVjbKc/twZvcM3Dr5tceCQtPl6Ma5tGsJo/CRtnETa4rPzGuCMEPJEUJiboPzI5QIDAQAB",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

@@ -1,0 +1,5 @@
+/* First step: override selection restrictions on body only. */
+body {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
