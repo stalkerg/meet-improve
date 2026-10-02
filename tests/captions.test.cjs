@@ -114,7 +114,7 @@ test('large history drains in whole-sentence windows', () => {
 });
 test('a too-long sentence stops instead of cutting content', () => {
   const t = fast({ maxWindowChars: 100 }); t.update('1','A','あ'.repeat(101),0);
-  assert.throws(()=>t.take(0), /без обрезки/);
+  assert.throws(()=>t.take(0), /without truncating/);
 });
 test('changed character count counts additions/corrections, not entire transcript', () => {
   assert.equal(changedChars('abcd', 'abcdef'), 2);
@@ -200,10 +200,10 @@ test('history character limit accounts for edits, deletions and skipped baseline
   t.seed('0', 'A', '以前の長い文章です。');
   t.update('0', 'A', '以前の長い文章です。一。', 0);
   t.update('1', 'A', '二。', 0); t.update('2', 'A', '三。', 0);
-  assert.throws(() => t.update('3', 'A', '四。', 1), /лимит истории/);
+  assert.throws(() => t.update('3', 'A', '四。', 1), /History limit/);
   assert.equal(t.document.length, 3);
   t.update('1', 'A', '', 2); t.update('3', 'A', '四。', 2);
   assert.equal(t.document.length, 3);
-  assert.throws(() => t.update('2', 'A', '三。長い追記。', 3), /лимит истории/);
+  assert.throws(() => t.update('2', 'A', '三。長い追記。', 3), /History limit/);
   assert.equal(t.document.find(s => s.id === '2:0').text, '三。');
 });

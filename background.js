@@ -13,7 +13,7 @@ chrome.runtime.onConnect.addListener((port) => {
     native.onMessage.addListener(send);
     native.onDisconnect.addListener(() => {
       const error = chrome.runtime.lastError;
-      send({ type: 'error', message: error?.message || 'Локальный переводчик отключён.' });
+      send({ type: 'error', message: error?.message || 'The local translator has disconnected.' });
       closed = true;
       port.disconnect();
     });

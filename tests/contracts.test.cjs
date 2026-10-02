@@ -12,11 +12,20 @@ test('package and extension versions match', () => {
   assert.equal(manifest.version, pkg.version);
 });
 
-test('UI and native host expose the same target-language allowlist', () => {
+test('UI and native host expose the same target languages with English names', () => {
   const output = execFileSync('python3', ['-B', '-c',
-    'import json; from native.host import TARGET_LANGUAGES; print(json.dumps(sorted(TARGET_LANGUAGES)))'],
+    'import json; from native.host import TARGET_LANGUAGES; print(json.dumps(TARGET_LANGUAGES))'],
     { cwd: root, encoding: 'utf8' });
-  assert.deepEqual(Object.keys(TARGET_LANGUAGES).sort(), JSON.parse(output));
+  assert.deepEqual(TARGET_LANGUAGES, JSON.parse(output));
+});
+
+test('extension-owned UI and error copy has no leftover Russian text', () => {
+  for (const file of ['content.js', 'captions.js', 'background.js', 'native/host.py', 'manifest.json']) {
+    assert.doesNotMatch(readFileSync(path.join(root, file), 'utf8'), /\p{Script=Cyrillic}/u, file);
+  }
+  const content = readFileSync(path.join(root, 'content.js'), 'utf8');
+  assert.match(content, /host\.lang = 'en'/);
+  assert.match(content, /host\.dir = 'ltr'/);
 });
 
 test('extension permissions remain scoped to Meet and native messaging', () => {

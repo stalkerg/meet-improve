@@ -134,7 +134,7 @@ class Codex:
     def start(self):
         codex = shutil.which('codex')
         if not codex:
-            raise RuntimeError('Codex не найден в PATH. Установите CLI.')
+            raise RuntimeError('Codex was not found in PATH. Install the CLI.')
         self.work = tempfile.TemporaryDirectory(prefix='meet-improve-')
         cwd = Path(self.work.name)
         instructions = cwd / 'translator.txt'
@@ -170,7 +170,7 @@ class Codex:
         for key in ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL']:
             env.pop(key, None)
         if self.cancelled.is_set():
-            raise RuntimeError('Перевод отменён.')
+            raise RuntimeError('Translation cancelled.')
         self.proc = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=None if sys.argv[1:] == ['--smoke-test'] else subprocess.DEVNULL,
                                      text=True, encoding='utf-8', start_new_session=True)
@@ -183,12 +183,12 @@ class Codex:
             finally:
                 self.events.put(None)
         threading.Thread(target=reader, daemon=True).start()
-        self.rpc('initialize', {'clientInfo': {'name': 'meet_improve', 'version': '0.5.0'},
+        self.rpc('initialize', {'clientInfo': {'name': 'meet_improve', 'version': '0.5.1'},
                                'capabilities': {'experimentalApi': True}})
         self.send({'method': 'initialized', 'params': {}})
         account = self.rpc('account/read', {'refreshToken': False}).get('account')
         if not account or account.get('type') != 'chatgpt':
-            raise RuntimeError('Нужен вход Codex через ChatGPT. API-режим запрещён; обратитесь к владельцу.')
+            raise RuntimeError('Codex must be signed in with ChatGPT. API-key mode is disabled; contact the owner.')
         cursor, found = None, None
         while True:
             page = self.rpc('model/list', {'includeHidden': True, 'cursor': cursor})
@@ -197,7 +197,7 @@ class Codex:
             if not cursor:
                 break
         if not found or not any(e['reasoningEffort'] == EFFORT for e in found['supportedReasoningEfforts']):
-            raise RuntimeError('gpt-6-luna / low недоступна. Другую модель автоматически не выбираем.')
+            raise RuntimeError('gpt-6-luna / low is unavailable. No fallback model will be selected.')
         return {'model': MODEL, 'effort': EFFORT, 'auth': 'chatgpt', 'protocol': 3}
 
     def send(self, message):
@@ -207,23 +207,23 @@ class Codex:
     def next_event(self, deadline):
         while True:
             if self.cancelled.is_set():
-                raise RuntimeError('Перевод отменён.')
+                raise RuntimeError('Translation cancelled.')
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise RuntimeError('Codex не ответил за 90 секунд; перевод остановлен.')
+                raise RuntimeError('Codex did not respond within 90 seconds; translation stopped.')
             try:
                 event = self.events.get(timeout=min(0.5, remaining))
                 break
             except queue.Empty:
                 continue
         if event is None:
-            raise RuntimeError('Codex завершился. Проверьте CLI и вход через ChatGPT.')
+            raise RuntimeError('Codex exited. Check the CLI and ChatGPT sign-in.')
         if 'method' in event and 'id' in event:
             # Never grant tool/permission/auth requests from the translator.
             self.send({'id': event['id'], 'error': {'code': -32601, 'message': 'Translator has no tools'}})
-            raise RuntimeError('Codex запросил инструмент или разрешение; перевод остановлен.')
+            raise RuntimeError('Codex requested a tool or permission; translation stopped.')
         if event.get('method') == 'error':
-            raise RuntimeError('Ошибка Codex: ' + str(event.get('params', {}).get('message', 'request failed')))
+            raise RuntimeError('Codex error: ' + str(event.get('params', {}).get('message', 'request failed')))
         return event
 
     def rpc(self, method, params):
@@ -257,7 +257,7 @@ class Codex:
             'config': {'model_reasoning_effort': EFFORT},
         })
         if started['model'] != MODEL or started.get('reasoningEffort') != EFFORT:
-            raise RuntimeError('Codex изменил модель или reasoning; перевод остановлен.')
+            raise RuntimeError('Codex changed the model or reasoning effort; translation stopped.')
         self.thread = started['thread']['id']
         self.thread_language = target_language
         return self.thread
@@ -269,7 +269,7 @@ class Codex:
         context = validate_segments(context, limit=10, max_chars=6000)
         try:
             if self.cancelled.is_set():
-                raise RuntimeError('Перевод отменён.')
+                raise RuntimeError('Translation cancelled.')
             thread = self._translation_thread(target_language)
             self.thread_tokens = None
             result = self._translate_window(thread, window, context)
@@ -306,7 +306,7 @@ class Codex:
                 if item['type'] == 'agentMessage':
                     outputs.append(item['text'])
                 elif item['type'] not in ('userMessage', 'reasoning'):
-                    raise RuntimeError('Неожиданное действие Codex; перевод остановлен.')
+                    raise RuntimeError('Unexpected Codex action; translation stopped.')
             if event.get('method') == 'turn/completed':
                 turn = params['turn']
                 if turn['status'] != 'completed':
@@ -314,21 +314,21 @@ class Codex:
                 break
         result = json.loads(outputs[-1] if outputs else '{}')
         if not isinstance(result, dict) or result.get('windowId') != window['id']:
-            raise RuntimeError('Несовпадение ID окна в ответе переводчика')
+            raise RuntimeError('Translation window ID does not match')
         segments = result.get('segments')
         if not isinstance(segments, list) or len(segments) != len(window['segments']):
-            raise RuntimeError('Некорректное количество привязок перевода')
+            raise RuntimeError('Incorrect number of translation anchors')
         translated = {}
         for item in segments:
             if not isinstance(item, dict) or not isinstance(item.get('id'), str):
-                raise RuntimeError('Некорректная привязка перевода')
+                raise RuntimeError('Invalid translation anchor')
             if item['id'] in translated or not isinstance(item.get('text'), str) or not item['text'].strip():
-                raise RuntimeError('Повторная привязка или пустой перевод')
+                raise RuntimeError('Duplicate anchor or empty translation')
             translated[item['id']] = item['text']
         if set(translated) != {item['id'] for item in window['segments']}:
-            raise RuntimeError('Несовпадение привязок перевода')
+            raise RuntimeError('Translation anchors do not match')
         if sum(map(len, translated.values())) > 96000:
-            raise RuntimeError('Слишком большой перевод')
+            raise RuntimeError('Translation is too large')
         result['segments'] = [{'id': item['id'], 'text': translated[item['id']]} for item in window['segments']]
         return result
 
@@ -380,7 +380,7 @@ def run_native():
         if not isinstance(first, dict) or first.get('type') != 'hello':
             return
         if first.get('protocol') != 3:
-            raise ValueError('Версии не совпадают. Обновите Meet Improve и перезапустите перевод.')
+            raise ValueError('Version mismatch. Reload Meet Improve and restart translation.')
         write_message({'type': 'ready', **engine.start()})
         while True:
             message = inbox.get()

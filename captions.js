@@ -1,9 +1,9 @@
 /* Sentence anchors are only for replacing a translated tail, never separate requests. */
 (() => {
   const normalize = value => value.replace(/\s+/gu, ' ').trim();
-  const TARGET_LANGUAGES = Object.freeze({ ru: 'Русский', en: 'English', ja: '日本語',
-    de: 'Deutsch', fr: 'Français', es: 'Español', pt: 'Português', it: 'Italiano',
-    zh: '中文', ko: '한국어', uk: 'Українська', ar: 'العربية' });
+  const TARGET_LANGUAGES = Object.freeze({ ru: 'Russian', en: 'English', ja: 'Japanese',
+    de: 'German', fr: 'French', es: 'Spanish', pt: 'Portuguese', it: 'Italian',
+    zh: 'Chinese', ko: 'Korean', uk: 'Ukrainian', ar: 'Arabic' });
   const DEFAULTS = Object.freeze({ intervalMs: 4000, newChars: 500, overlap: 10, targetLanguage: 'ru',
     minDispatchMs: 1000, maxWindowChars: 48000, maxSegments: 512, maxTranscriptChars: 1000000 });
   // Use the runtime's Unicode sentence rules; the source is not restricted to Japanese.
@@ -50,7 +50,7 @@
       const chars = this.transcriptChars - state.segments.reduce((sum, item) => sum + item.text.length, 0) +
         segments.reduce((sum, item) => sum + item.text.length, 0);
       if (chars > this.options.maxTranscriptChars) {
-        throw Error('Достигнут лимит истории. Остановите и начните новую сессию.');
+        throw Error('History limit reached. Stop and start a new session.');
       }
       state.text = text; state.speaker = speaker; state.segments = segments;
       this.transcriptChars = chars;
@@ -106,7 +106,7 @@
       }
       // Never truncate a long/incomplete sentence, nor silently drop the required overlap.
       if (end === start || (end <= first && first < this.document.length)) {
-        throw Error('Предложение или хвост слишком длинный. Перевод остановлен без обрезки текста.');
+        throw Error('A sentence or overlap is too long. Translation stopped without truncating text.');
       }
       const context = this.document.slice(Math.max(0, start - 10), start);
       while (context.reduce((sum, item) => sum + item.text.length, 0) > 6000) context.shift();
@@ -128,10 +128,10 @@
         return same(item, current) || (index === old.length - 1 && item.id === current?.id &&
           item.speaker === current.speaker && current.text.startsWith(item.text));
       })) return false;
-      if (results.length !== snapshot.window.segments.length) throw Error('Неверное число фрагментов перевода.');
+      if (results.length !== snapshot.window.segments.length) throw Error('Incorrect number of translation segments.');
       const byId = new Map(results.map(item => [item.id, item.text]));
       if (byId.size !== results.length || snapshot.window.segments.some(item =>
-        typeof byId.get(item.id) !== 'string' || !byId.get(item.id).trim())) throw Error('Неверные ID перевода.');
+        typeof byId.get(item.id) !== 'string' || !byId.get(item.id).trim())) throw Error('Invalid translation segment IDs.');
       this.translated = this.translated.slice(0, snapshot.start).concat(snapshot.window.segments.map(item =>
         ({ ...item, translation: byId.get(item.id) })));
       return true;

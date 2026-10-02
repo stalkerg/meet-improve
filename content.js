@@ -3,6 +3,8 @@
   const { Tracker, normalize, DEFAULTS, TARGET_LANGUAGES } = globalThis.MeetCaptions;
   const host = document.createElement('div');
   host.id = 'meet-improve-panel';
+  host.lang = 'en';
+  host.dir = 'ltr';
   const shadow = host.attachShadow({ mode: 'closed' });
   // Static extension-owned markup only. Meeting text is always rendered with textContent.
   shadow.innerHTML = `
@@ -21,18 +23,18 @@
       .note{color:#c9adff;font-size:12px;margin-top:8px}.pending{color:#bcbcbc;font-size:12px}.empty{padding:16px 12px;color:#bcbcbc;font-size:13px;margin:0}
       [hidden]{display:none!important}.compact{width:auto}.compact header{border:0}
     </style>
-    <section aria-label="Перевод субтитров Meet">
-      <header><strong>Meet · перевод субтитров</strong><button id="collapse" aria-expanded="true" aria-label="Свернуть панель">−</button></header>
+    <section aria-label="Meet caption translation">
+      <header><strong>Meet · caption translation</strong><button id="collapse" aria-expanded="true" aria-label="Collapse panel">−</button></header>
       <div id="body">
         <div class="controls">
-          <div class="actions"><button id="start">Старт</button><button id="clear">Сбросить</button><span class="model">gpt-6-luna · low</span></div>
-          <div class="settings"><label>Переводить на<select id="targetLanguage"></select></label><label>Новый текст, знаков<input id="newChars" type="number" min="100" max="4000" step="100" value="${DEFAULTS.newChars}"></label><label>Ожидание, сек.<input id="interval" type="number" min="3" max="30" step="1" value="${DEFAULTS.intervalMs / 1000}"></label><label>Переводить хвост<select id="overlap"><option value="10">10 предложений</option><option value="5">5 предложений</option></select></label></div>
-          <p class="notice">Язык оригинала определяется автоматически. Выберите язык субтитров отдельно в Meet.</p>
-          <label><input id="history" type="checkbox">Перевести уже имеющиеся субтитры</label>
-          <p class="notice">При старте текст субтитров и имена говорящих отправляются в OpenAI через ваш Codex / ChatGPT. API-ключ не используется.</p>
+          <div class="actions"><button id="start">Start</button><button id="clear">Reset</button><span class="model">gpt-6-luna · low</span></div>
+          <div class="settings"><label>Translate to<select id="targetLanguage"></select></label><label>New text (chars)<input id="newChars" type="number" min="100" max="4000" step="100" value="${DEFAULTS.newChars}"></label><label>Wait (seconds)<input id="interval" type="number" min="3" max="30" step="1" value="${DEFAULTS.intervalMs / 1000}"></label><label>Retranslate last<select id="overlap"><option value="10">10 sentences</option><option value="5">5 sentences</option></select></label></div>
+          <p class="notice">Source language is detected automatically. Set the caption language separately in Meet.</p>
+          <label><input id="history" type="checkbox">Translate existing captions</label>
+          <p class="notice">Starting sends caption text and speaker names to OpenAI through your Codex / ChatGPT account. No API key is used.</p>
         </div>
-        <p id="status" role="status">Включите субтитры Meet, затем нажмите «Старт».</p>
-        <div id="entries"><p class="empty">Здесь появятся оригинал и перевод.</p></div>
+        <p id="status" role="status">Enable captions in Meet, then click Start.</p>
+        <div id="entries"><p class="empty">The original text and translation will appear here.</p></div>
       </div>
     </section>`;
   document.documentElement.append(host);
@@ -54,7 +56,7 @@
     $('status').textContent = text;
     $('status').className = error ? 'error' : '';
   }
-  function stop(message = 'Остановлено. Новые субтитры не отправляются.', error = false) {
+  function stop(message = 'Stopped. New captions are not being sent.', error = false) {
     ready = false;
     clearInterval(timer);
     observer?.disconnect();
@@ -63,8 +65,8 @@
     port = null;
     old?.disconnect();
     inflight = null;
-    if (row?.outdated) row.note.textContent = 'Остановлено — последняя версия текста не переведена';
-    $('start').textContent = 'Старт';
+    if (row?.outdated) row.note.textContent = 'Stopped — the latest text has not been translated';
+    $('start').textContent = 'Start';
     for (const id of settingIds) $(id).disabled = false;
     status(message, error);
   }
@@ -76,7 +78,7 @@
   }
   function readRows(root) {
     return [...root.querySelectorAll('.nMcdL')].map(el => ({
-      el, speaker: normalize(el.querySelector('.NWpY1d')?.textContent || 'Говорящий'),
+      el, speaker: normalize(el.querySelector('.NWpY1d')?.textContent || 'Speaker'),
       text: el.querySelector('.ygicle')?.textContent || '',
     }));
   }
@@ -101,7 +103,7 @@
       entries.querySelector('.empty')?.remove();
       const element = document.createElement('article');
       const details = document.createElement('details');
-      const summary = document.createElement('summary'); summary.textContent = 'Оригинал';
+      const summary = document.createElement('summary'); summary.textContent = 'Original';
       const source = document.createElement('p'); source.className = 'source'; source.lang = 'und'; source.dir = 'auto';
       details.append(summary, source);
       const translation = document.createElement('p'); translation.className = 'translation'; translation.lang = targetLanguage;
@@ -112,12 +114,12 @@
       row = { source, translation, note };
     }
     updateText(row.source, view.source);
-    updateText(row.translation, view.translation || 'Накапливаю контекст для общего перевода…');
+    updateText(row.translation, view.translation || 'Collecting context for translation…');
     row.translation.className = view.translation ? 'translation' : 'translation pending';
     row.outdated = view.outdated;
     row.note.textContent = view.outdated ?
-      (view.translation ? 'Предварительный перевод · новый текст и хвост будут обновлены вместе' : 'Ожидание перевода по времени или объёму текста') :
-      'Перевод актуален · новые реплики будут добавлены сюда';
+      (view.translation ? 'Provisional translation · new text and recent sentences will be updated together' : 'Waiting for the time or text threshold') :
+      'Translation is up to date · new speech will be added here';
     if (atBottom) entries.scrollTop = entries.scrollHeight;
   }
   function scan(seed = false) {
@@ -159,9 +161,9 @@
   }
   function tickUnsafe() {
     if (!port) return;
-    if (location.pathname !== route) { stop('Встреча изменилась. Нажмите «Старт» для новой встречи.'); return; }
+    if (location.pathname !== route) { stop('The meeting has changed. Click Start for the new meeting.'); return; }
     if (!ready) {
-      if (performance.now() - connectedAt > 95000) stop('Нет ответа локального переводчика. Проверьте установку.', true);
+      if (performance.now() - connectedAt > 95000) stop('No response from the local translator. Check the installation.', true);
       return;
     }
     // Periodic scans also detect root replacement and caption visibility toggles.
@@ -176,10 +178,10 @@
         port.postMessage({ type: 'translate', requestId: id, targetLanguage, window: snapshot.window, context: snapshot.context });
       }
     } else if (performance.now() - inflight.since > 95000) {
-      stop('Тайм-аут перевода. Повторных запросов автоматически не будет.', true); return;
+      stop('Translation timed out. Requests will not be retried automatically.', true); return;
     }
-    status(!found ? 'Ожидаю субтитры: включите их в Meet.' :
-      `${inflight ? 'Перевожу текст и хвост' : 'Накапливаю контекст'} · изменено: ${tracker.pendingChars} знаков${lastLatency}`);
+    status(!found ? 'Waiting for captions: enable them in Meet.' :
+      `${inflight ? 'Translating text and recent sentences' : 'Collecting context'} · changed: ${tracker.pendingChars} chars${lastLatency}`);
   }
   function start() {
     if (!$('newChars').reportValidity() || !$('interval').reportValidity()) return;
@@ -194,8 +196,8 @@
     entries.replaceChildren(); inflight = null; lastLatency = '';
     route = location.pathname; previous = []; previousRoot = null; dirty = true;
     try { if (!$('history').checked) scan(true); } catch (error) { stop(error.message, true); return; }
-    $('start').textContent = 'Стоп'; for (const id of settingIds) $(id).disabled = true;
-    status('Подключаю локальный Codex…');
+    $('start').textContent = 'Stop'; for (const id of settingIds) $(id).disabled = true;
+    status('Connecting to local Codex…');
     connectedAt = performance.now();
     try {
       const connection = chrome.runtime.connect({ name: 'meet-translate' });
@@ -203,7 +205,7 @@
       connection.onMessage.addListener(message => {
         if (port !== connection) return;
         if (message.type === 'ready') {
-          if (message.protocol !== 3) { stop('Обновите расширение и перезапустите переводчик: версии не совпадают.', true); return; }
+          if (message.protocol !== 3) { stop('Version mismatch. Reload the extension and restart the translator.', true); return; }
           ready = true; tick();
         }
         else if (message.type === 'error') stop(message.message, true);
@@ -212,17 +214,17 @@
             scan(); // Incorporate new speech/corrections before accepting a snapshot result.
             const snapshot = inflight.snapshot;
             if (message.windowId !== snapshot.window.id || !Array.isArray(message.segments)) {
-              throw Error('Некорректный ответ переводчика.');
+              throw Error('Invalid response from the translator.');
             }
             if (tracker.accept(snapshot, message.segments)) render();
           } catch (error) { stop(error.message, true); return; }
-          lastLatency = ` · ${(message.elapsedMs / 1000).toFixed(1)} с`;
+          lastLatency = ` · ${(message.elapsedMs / 1000).toFixed(1)} s`;
           inflight = null; tick();
         }
       });
       connection.onDisconnect.addListener(() => {
         const error = chrome.runtime.lastError;
-        if (port === connection) stop(error?.message || 'Соединение с переводчиком закрыто.', true);
+        if (port === connection) stop(error?.message || 'The translator connection is closed.', true);
       });
       observer = new MutationObserver(() => { dirty = true; });
       observer.observe(document.body, { childList: true, characterData: true, subtree: true });
@@ -231,7 +233,7 @@
   }
   $('start').addEventListener('click', () => port ? stop() : start());
   $('clear').addEventListener('click', () => {
-    stop('История очищена. Нажмите «Старт» для новой сессии.');
+    stop('History cleared. Click Start for a new session.');
     entries.replaceChildren(); row = null; tracker = null;
   });
   $('collapse').addEventListener('click', () => {
@@ -240,7 +242,7 @@
     shadow.querySelector('section').classList.toggle('compact', collapsed);
     $('collapse').textContent = collapsed ? '+' : '−';
     $('collapse').setAttribute('aria-expanded', String(!collapsed));
-    $('collapse').setAttribute('aria-label', collapsed ? 'Развернуть панель' : 'Свернуть панель');
+    $('collapse').setAttribute('aria-label', collapsed ? 'Expand panel' : 'Collapse panel');
   });
   window.addEventListener('pagehide', () => stop(), { once: true });
 })();

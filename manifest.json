@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Meet Improve",
-  "version": "0.5.0",
-  "description": "Выделение текста и перевод субтитров Google Meet через локальный Codex (ChatGPT).",
+  "version": "0.5.1",
+  "description": "Text selection and contextual Google Meet caption translation through local Codex (ChatGPT).",
   "content_scripts": [
     {
       "matches": [

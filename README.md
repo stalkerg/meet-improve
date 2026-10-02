@@ -7,15 +7,15 @@ It uses your existing Codex sign-in with ChatGPT, not a separately billed API ke
 The translator detects the source language automatically, including mixed-language speech.
 Choose only the **target language**. The default is **Russian**.
 
-## Updating to 0.5.0
+## Updating to 0.5.1
 
-1. Click **Stop** (`Стоп`) in the old panel.
+1. Click **Stop** in the old panel.
 2. Reload Meet Improve at `brave://extensions/`.
-3. Refresh the Meet tab, choose the target language and click **Start** (`Старт`).
+3. Refresh the Meet tab, choose the target language and click **Start**.
 
 The extension ID remains `kekiclkdaklolmdekdpdiflkhnnnhmpn`.
 You do not need to reinstall the native host unless the project directory has moved.
-Version 0.5.0 keeps native protocol 3; reload the extension and refresh Meet together.
+Version 0.5.1 keeps native protocol 3; reload the extension and refresh Meet together.
 
 ## How translation works
 
@@ -99,19 +99,21 @@ There is no systemd service, HTTP listener or background daemon to start separat
 
 ## Panel controls
 
-The panel labels currently remain in Russian; the target selector changes the
-**translation language**, not the interface language.
+The interface, language names and extension-owned status/error messages are in **English**.
+The target selector changes the **translation language**, not the interface language;
+Russian remains the default translation target. Browser- or Codex-provided errors may
+follow the language settings of those applications.
 
 | Panel label | Meaning |
 | --- | --- |
-| `Старт` / `Стоп` | Start / stop translation |
-| `Переводить на` | Target language; default Russian |
-| `Новый текст, знаков` | New/changed character threshold: 100–4000; default 500 |
-| `Ожидание, сек.` | Time threshold: 3–30 seconds; default 4 |
-| `Переводить хвост` | Retranslate the last 5 or 10 sentences; default 10 |
-| `Перевести уже имеющиеся субтитры` | Include captions already visible at Start |
-| `Сбросить` | Stop and clear the panel history |
-| `Оригинал` | Expand the original source text |
+| `Start` / `Stop` | Start / stop translation |
+| `Translate to` | Target language; default Russian |
+| `New text (chars)` | New/changed character threshold: 100–4000; default 500 |
+| `Wait (seconds)` | Time threshold: 3–30 seconds; default 4 |
+| `Retranslate last` | Retranslate the last 5 or 10 sentences; default 10 |
+| `Translate existing captions` | Include captions already visible at Start |
+| `Reset` | Stop and clear the panel history |
+| `Original` | Expand the original source text |
 | `−` / `+` | Collapse / expand the panel without stopping translation |
 
 Available targets: **Russian, English, Japanese, German, French, Spanish, Portuguese,
