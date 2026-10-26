@@ -17,7 +17,7 @@ chrome.runtime.onConnect.addListener((port) => {
       closed = true;
       port.disconnect();
     });
-    native.postMessage({ type: 'hello', protocol: 3 });
+    native.postMessage({ type: 'hello', protocol: 4 });
   } catch (error) {
     send({ type: 'error', message: error.message });
     port.disconnect();

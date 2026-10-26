@@ -7,7 +7,7 @@ It uses your existing Codex sign-in with ChatGPT, not a separately billed API ke
 The translator detects the source language automatically, including mixed-language speech.
 Choose only the **target language**. The default is **Russian**.
 
-## Updating to 0.5.1
+## Updating to 0.6.0
 
 1. Click **Stop** in the old panel.
 2. Reload Meet Improve at `brave://extensions/`.
@@ -15,27 +15,68 @@ Choose only the **target language**. The default is **Russian**.
 
 The extension ID remains `kekiclkdaklolmdekdpdiflkhnnnhmpn`.
 You do not need to reinstall the native host unless the project directory has moved.
-Version 0.5.1 keeps native protocol 3; reload the extension and refresh Meet together.
+Version 0.6.0 uses **native protocol 4** for progressive results and explicit translation
+continuity. Reload the extension and refresh Meet together; an old content script or
+background worker will stop with a version-mismatch error rather than mix protocols.
+
+This release adds early provisional display of complete translated anchors, smaller
+contextual batches, incremental history rendering and local timing diagnostics. It also
+includes the previously local timer, ASR-prefix and draggable-panel improvements.
+The model, reasoning effort, service tier and four-second/500-character triggers are unchanged.
 
 ## How translation works
 
-A request is sent when **either** condition is met:
+A translation becomes ready when there is unsent text and **either** condition is met:
 
-- **4 seconds** have elapsed since the first unsent change;
+- **4 seconds** have elapsed since the last request was **sent** (for the first request,
+  count from the first caption change);
 - **500 new or changed characters** have accumulated.
 
 Both thresholds are configurable before starting. They are joined by **OR**, not AND.
-Only one request runs at a time, with at least one second between dispatches.
-Changes arriving during generation are coalesced rather than queued as obsolete versions.
+Only one request runs at a time, with at least one second between dispatches. The timer
+keeps running while the model works. At most **one pending update** waits locally; new
+speech and ASR corrections update its text instead of adding obsolete snapshots to a queue.
+The complete contextual window is built just before dispatch, after processing the previous
+response. If an update is already queued, it is sent immediately when the current request
+finishes; only that actual dispatch restarts the interval. An early volume trigger also
+restarts the interval. A queued update is cancelled if its source changes are fully reverted
+or the current translation already covers them.
 
-Each request translates new speech together with the **last 10 sentences**; you can
-select a five-sentence overlap instead. An unfinished phrase is included whole, not
-split into arbitrary character-sized chunks.
+For example: send at 4 s, new speech at 7 s, queue at 8 s, receive the first response at
+10 s and immediately send the latest text. The next time deadline is then 14 s.
+Silence alone never causes requests. After a long pause, new text is eligible immediately
+if the interval has already elapsed. New characters and completed responses do not restart
+the timer. The four seconds are a dispatch threshold, not an end-to-end latency guarantee;
+model generation and an in-flight request can still add delay.
+
+Each request translates new speech together with the **last 10 sentence/clause anchors**;
+you can select a five-anchor overlap instead. For a sentence longer than 600 characters,
+clause punctuation (commas, semicolons and colons) can provide additional anchors. Latin
+punctuation must be followed by whitespace; CJK clause punctuation is also supported.
+These are not separate translation calls: the model still translates the whole window
+as one dialogue. Unpunctuated phrases remain whole, never cut at a character quota.
+
+Batches have a **soft 6,000-source-character target** to avoid making a large backlog one
+long generation. When the required overlap is already large, the soft budget grows to
+allow up to another 2,000 characters of new speech. At least one changed whole anchor is
+included, even if it alone exceeds the soft budget. No text or configured overlap is
+discarded: remaining speech drains through subsequent contextual windows. The hard
+48,000-character/512-anchor safety limits still apply.
 
 The model receives the window as **one contextual dialogue**, not separate translation
 requests for each utterance. Sentence IDs are output anchors: the translated tail is
 replaced in place, new text is appended, and the older prefix stays intact.
-Corrections to earlier source text expand the replacement window as needed.
+Corrections to earlier source text expand the replacement window as needed. Archived
+display blocks are not permanently frozen: earlier ASR corrections still invalidate
+their affected translated suffix.
+
+Each request also carries up to **20 previously accepted translations / 6,000 target
+characters**, keyed to unchanged source anchors in its window and preceding context.
+These references survive model-thread rotation. The prompt uses them for terminology,
+names and register, and discourages gratuitous stylistic rewrites. References at or
+after the first corrected source anchor are excluded. The latest source and clarified
+meaning always override earlier translations. This is bounded continuity, not a verified
+glossary or a guarantee of terminology consistency over an entire meeting.
 
 The host reuses one **ephemeral Codex thread for up to 10 translations** to improve
 prompt-cache reuse. Each translation is a new turn containing the complete current
@@ -52,10 +93,31 @@ translation displayed in the panel. Errors stop the session without retries.
 The model remains `gpt-6-luna` with reasoning `low` and **Standard** service tier.
 Thread reuse does not enable the higher-usage Fast tier.
 
-A result for speech that is still being extended may be shown as provisional. Results
-for source text that has been corrected are discarded. A temporary ASR correction
-that returns to the already translated text does not trigger an unnecessary request.
-Sentence segmentation is cached per utterance instead of reprocessing the whole history.
+The native host decodes streamed JSON incrementally and forwards **only complete, ordered,
+nonempty translated anchors for the current window and turn**, never raw tokens or JSON
+fragments. They are displayed as **provisional** without completing the request or changing
+the accepted translation state. Source corrections immediately hide stale previews.
+The final response must still pass full validation; Stop, timeout or failure removes the
+preview while preserving previously accepted, still-current history. A differently ordered
+JSON root can fall back to final-only display. Early display is not guaranteed, particularly
+when the model must generate a large overlap before reaching new speech.
+
+A result for speech that is still being extended may be shown as provisional. If Meet
+corrects the source during generation, the matching prefix of the response is retained
+instead of discarding the entire translation. Everything from the first changed anchor
+onward is withheld and retranslated in the next contextual window. Already displayed
+translations of corrected text are also hidden until updated. Matching source anchors
+do not guarantee unchanged meaning: new context can still revise the retained prefix.
+If the very first requested anchor changes, there may be no usable result to show yet;
+this does not eliminate model latency or guarantee an update every four seconds.
+A temporary ASR correction that returns to the already translated text does not trigger
+an unnecessary request.
+Segmentation is cached per utterance. Pending character counts are maintained incrementally;
+idle scheduling does not repeatedly compare every historical character. The panel updates
+only affected 32-anchor blocks, keeps older text nodes intact for selection, and lets the
+browser skip layout of offscreen blocks. Original text is rendered only when expanded.
+The caption observer watches the caption container rather than every mutation of Meet's
+entire page; periodic discovery reconnects it after a container replacement (up to ~2 s).
 
 The prompt in `native/translator-prompt.txt` accounts for speech recognition errors:
 homophones, incorrect words or characters, missing words, punctuation, fragments and
@@ -107,14 +169,38 @@ follow the language settings of those applications.
 | Panel label | Meaning |
 | --- | --- |
 | `Start` / `Stop` | Start / stop translation |
-| `Translate to` | Target language; default Russian |
+| `To` | Target language; default Russian |
+| `Settings` | Expand timing, overlap and existing-caption options |
 | `New text (chars)` | New/changed character threshold: 100–4000; default 500 |
 | `Wait (seconds)` | Time threshold: 3–30 seconds; default 4 |
-| `Retranslate last` | Retranslate the last 5 or 10 sentences; default 10 |
-| `Translate existing captions` | Include captions already visible at Start |
+| `Retranslate last` | Retranslate the last 5 or 10 sentence/clause anchors; default 10 |
+| `Include existing captions` | Include captions already visible at Start |
 | `Reset` | Stop and clear the panel history |
 | `Original` | Expand the original source text |
 | `−` / `+` | Collapse / expand the panel without stopping translation |
+| Panel title bar | Drag to move the panel; the collapse button remains clickable |
+
+The panel stays within the viewport, including after expanding it or resizing the
+browser. Its position lasts for the current page only; reloading restores the default
+top-right position. Dragging does not interrupt translation or affect text selection
+in the captions.
+
+The compact status shows the wait countdown or elapsed request time. `queued` means one
+fresh update is ready and waiting for the current request to finish. `partial` means
+only a provisional portion is available; `source changed` means the last response had
+no usable portion for the current source. `last` measures the last request round trip,
+not the total delay since speech. Detailed explanations live here rather than filling
+the caption panel.
+
+`provisional` marks streamed preview text before final validation. **Settings** also shows
+p50/p95 timings over the latest 128 completed requests: request round trip, first useful
+text, and observed caption change → first useful text (including aggregation and queue wait).
+Rewording only the already-translated overlap does not count as first useful text. A source
+anchor must still match, or be an allowed unfinished extension, when first displayed.
+The caption-change clock starts at the first locally observed unsent change; it does not
+measure audio-to-ASR latency or precisely timestamp every sentence in an imported backlog.
+Fully discarded final responses are counted separately over the session. These numeric
+measurements stay in memory, are reset by Start/Reset, and do not record transcripts.
 
 Available targets: **Russian, English, Japanese, German, French, Spanish, Portuguese,
 Italian, Chinese, Korean, Ukrainian and Arabic**. There is no source-language selector:
@@ -196,13 +282,18 @@ not portable source files, and should not be published.
 
 - Source language detection is performed by the model, not the extension. Translation
   quality varies by language; not every offered target has been evaluated on real meetings.
-- Sentence anchors use `Intl.Segmenter` with the runtime's default locale, not speech-end
-  detection. ASR punctuation and mixed-language text can produce imperfect boundaries.
+- Sentence anchors use `Intl.Segmenter` with the runtime's default locale and optional clause
+  punctuation, not speech-end detection. ASR punctuation and mixed-language text can produce
+  imperfect boundaries. Clause anchors retain the configured overlap but are not necessarily
+  complete sentences.
 - A window is limited to **48,000 source characters and 512 anchors**. Larger histories
-  are drained through overlapping windows at whole-sentence boundaries. If one sentence
+  are drained through overlapping windows at whole-sentence/clause boundaries. If one phrase
   or the required overlap cannot fit, translation stops rather than truncating speech.
-- The total source-history limit is **1,000,000 characters**. Additional context before
-  a window is limited to ten whole sentences and 6,000 characters.
+- The total source-history limit is **1,000,000 characters**. Additional source context before
+  a window is limited to ten whole anchors and 6,000 characters. An entirely unpunctuated
+  utterance can still grow large and slow translation; the extension refuses to truncate it.
+  History is retained in memory, not virtualized away; document-reference rebuilding and
+  changed-utterance segmentation can still scale with retained history/utterance length.
 - DOM replacement can cause repeat translation. Corrections before the skipped startup
   history boundary can make the new-text boundary inaccurate.
 - Trigger wait time is added to model response latency. Retranslating the tail uses more
@@ -215,6 +306,10 @@ npm test
 # Without npm:
 node --test tests/*.test.cjs
 python3 -B -m unittest discover -s tests -p 'test_*.py'
+# Synthetic CPU and payload benchmark (no provider requests):
+npm run benchmark
+# Compare against a saved earlier captions.js:
+node tests/benchmark.cjs /path/to/earlier/captions.js
 ```
 
 To make a **real** request, consuming Codex usage, with a synthetic dialogue only:
@@ -228,13 +323,35 @@ For a browser fixture with a mock translator and **no OpenAI requests**:
 ```sh
 python3 -m http.server 8765 --bind 127.0.0.1
 # Open http://127.0.0.1:8765/tests/demo.html
+# Click "Run browser checks" (deterministic clock / manual mock transport).
+# Optional DevTools: await runRealtimeCheck() (real ticker, 6 s mock model, ~11 s).
 ```
 
 Tests cover independent time/volume triggers, aggregation, overlapping tail replacement,
-long unfinished phrases, corrections/deletions, stale results, no-op ASR changes,
+long unfinished phrases, corrections/deletions, partial results, stale-text hiding,
+dispatch-based deadlines, coalescing of queued updates, silence, repeated ASR revisions, no-op ASR changes,
 sentence caching, history limits, native validation, target-language validation,
 thread reuse/rotation, stale-turn filtering, failure handling and prompt boundaries.
-The browser fixture is also used to check panel behavior and selection.
+Additional tests cover soft request budgets, clause preservation, bounded continuity across
+rotation, every byte split of escaped streamed JSON, preview rollback, incremental counters,
+archived text-node preservation and local timing statistics. The browser fixture checks
+progressive display, source corrections, selection, observer reconnection, queue deadlines,
+failure/timeout behavior and layout, with no OpenAI requests.
+
+On 2026-10-26, the included local probe compared a saved local 0.5.4 baseline with 0.6.0
+(Node 26.11.1, 5,000 synthetic anchors, 60 warmed samples). Scheduling/count reads fell from
+2.29 ms to below 0.001 ms median; preparation of an active-tail render update fell from
+0.459 ms to 0.081 ms median. For a growing 31-clause utterance, the retranslated source window
+fell from 24,613 to 8,723 characters. Including source context and translation references,
+the JSON request was 24,704 vs 20,828 characters: extra continuity context has a real input cost.
+These are local CPU/payload measurements, **not** DOM paint, model or real-meeting speedups.
+
+The deterministic browser scenario passes 35 assertions (also at a 360 × 640 viewport).
+A real 400-ms ticker with a synthetic 6-s model displayed its first useful anchor about
+3.0 s after dispatch and dispatched the queued latest source about 6.0 s after the preceding
+dispatch, without another aggregation wait. This verifies the mechanism, not actual Luna
+latency. The streaming event shape was also checked against the installed Codex CLI 0.163.0
+generated App Server schema. No new real-model quality evaluation was performed for 0.6.0.
 
 A synthetic 40-request comparison on 2026-10-02 used the same evolving English → Russian
 caption windows, Luna Fast / low, and alternating test order. Reusing a thread for ten

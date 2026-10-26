@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Meet Improve",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Text selection and contextual Google Meet caption translation through local Codex (ChatGPT).",
   "content_scripts": [
     {
@@ -14,6 +14,7 @@
       "run_at": "document_idle",
       "js": [
         "captions.js",
+        "panel.js",
         "content.js"
       ]
     }

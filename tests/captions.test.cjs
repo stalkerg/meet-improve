@@ -78,6 +78,274 @@ test('in-flight obsolete correction rejected; latest changes coalesced', () => {
   const latest = t.take(2200); assert.equal(latest.window.segments[0].text, '正しい文。');
   t.accept(latest, reply(latest)); assert.equal(t.outdated, false);
 });
+
+test('tail corrections retain the translated prefix instead of discarding the whole response', () => {
+  const t = fast();
+  t.update('1', 'A', 'The first sentence is stable. The price is fifteen.', 0);
+  const first = t.take(0);
+  t.update('1', 'A', 'The first sentence is stable. The price is fifty.', 2000);
+  assert.equal(t.accept(first, reply(first)), true);
+  assert.deepEqual(t.translated.map(x => x.text), ['The first sentence is stable.']);
+  assert.equal(t.outdated, true);
+  assert.doesNotMatch(t.view().translation, /fifteen|fifty/);
+  const next = t.take(3000);
+  assert.equal(next.window.segments.at(-1).text, 'The price is fifty.');
+  t.accept(next, reply(next));
+  assert.equal(t.outdated, false);
+  assert.match(t.view().translation, /fifty/);
+});
+
+test('punctuation resegmentation stops at the mismatch without attaching shifted suffix IDs', () => {
+  const t = fast();
+  t.update('1', 'A', 'Stable. First clause and second clause. Final sentence.', 0);
+  const first = t.take(0);
+  t.update('1', 'A', 'Stable. First clause. And second clause. Final sentence.', 1000);
+  assert.equal(t.accept(first, reply(first)), true);
+  assert.deepEqual(t.translated.map(x => x.text), ['Stable.']);
+  const next = t.take(2000); t.accept(next, reply(next));
+  assert.equal(t.translated.length, 4);
+  assert.equal(t.outdated, false);
+});
+
+test('existing corrected translations are hidden immediately while the replacement is pending', () => {
+  const t = fast();
+  t.update('1', 'A', 'Stable. Delete the backup. Last sentence.', 0);
+  const first = t.take(0); t.accept(first, reply(first));
+  t.update('1', 'A', 'Stable. Do not delete the backup. Last sentence.', 1000);
+  assert.equal(t.view().translation, 'A: RU(Stable.)');
+  assert.equal(t.view().outdated, true);
+  // Merely rendering must not change the snapshot used to detect the correction.
+  assert.equal(t.translated.length, 3);
+  const next = t.take(2000); t.accept(next, reply(next));
+  assert.match(t.view().translation, /Do not delete/);
+});
+
+test('a deleted in-flight tail keeps only the surviving prefix', () => {
+  const t = fast(); t.update('1', 'A', 'Stable. Removed.', 0);
+  const first = t.take(0); t.update('1', 'A', 'Stable.', 1000);
+  assert.equal(t.accept(first, reply(first)), true);
+  assert.equal(t.translated.length, 1);
+  assert.equal(t.outdated, false);
+  assert.equal(t.take(2000), null);
+});
+
+test('speaker corrections do not misattribute the retained translation', () => {
+  const t = fast(); t.update('1', 'A', 'Stable.', 0); t.update('2', 'B', 'A reply.', 0);
+  const first = t.take(0); t.update('2', 'C', 'A reply.', 1000);
+  assert.equal(t.accept(first, reply(first)), true);
+  assert.equal(t.view().translation, 'A: RU(Stable.)');
+  const next = t.take(2000); t.accept(next, reply(next));
+  assert.match(t.view().translation, /C: RU\(A reply\.\)/);
+});
+
+test('partial overlap replacement preserves the older prefix and resumes from the missing tail', () => {
+  const t = fast({ overlap: 5 }); t.update('1', 'A', fixture(25), 0);
+  const first = t.take(0); t.accept(first, reply(first, 'OLD'));
+  t.update('1', 'A', fixture(25) + 'Draft.', 1000);
+  const second = t.take(1000); assert.equal(second.start, 20);
+  t.update('1', 'A', fixture(25) + 'Corrected.', 2000);
+  assert.equal(t.accept(second, reply(second, 'NEW')), true);
+  assert.ok(t.translated.slice(0, 20).every(x => x.translation.startsWith('OLD')));
+  assert.ok(t.translated.slice(20).every(x => x.translation.startsWith('NEW')));
+  assert.equal(t.translated.length, 25);
+  const third = t.take(3000); assert.equal(third.start, 20);
+  assert.equal(third.window.segments.at(-1).text, 'Corrected.');
+});
+
+test('a correction before the requested window rejects its result and expands the next window', () => {
+  const t = fast({ overlap: 5 }); t.update('1', 'A', fixture(25), 0);
+  const first = t.take(0); t.accept(first, reply(first));
+  t.update('1', 'A', fixture(25) + 'New.', 1000); const second = t.take(1000);
+  t.update('1', 'A', (fixture(25) + 'New.').replace('文章2です', '修正です'), 2000);
+  assert.equal(t.accept(second, reply(second)), false);
+  assert.equal(t.view().translation, 'A: RU(文章0です。) RU(文章1です。)');
+  assert.equal(t.take(3000).start, 0);
+});
+
+test('partial acceptance still validates every result anchor', () => {
+  const t = fast(); t.update('1', 'A', 'Stable. Old.', 0);
+  const first = t.take(0); t.update('1', 'A', 'Stable. Corrected.', 1000);
+  assert.throws(() => t.accept(first, reply(first).slice(0, 1)), /number/);
+  const bad = reply(first); bad[1].id = bad[0].id;
+  assert.throws(() => t.accept(first, bad), /IDs/);
+  assert.equal(t.translated.length, 0);
+});
+
+test('continuous character updates do not debounce the four-second deadline', () => {
+  const t = new Tracker();
+  for (let now = 0; now < 4000; now += 200) {
+    t.update('1', 'A', 'word '.repeat(now / 200 + 1), now);
+    assert.equal(t.dirtySince, 0);
+    assert.equal(t.take(now), null);
+  }
+  assert.ok(t.take(4000)); assert.equal(t.dirtySince, null);
+});
+
+test('in-flight additions keep their deadline and dispatch as soon as the request completes', () => {
+  const t = new Tracker(); t.update('1', 'A', 'We are discussing', 0);
+  const first = t.take(4000);
+  t.update('1', 'A', 'We are discussing the plan', 4500);
+  t.update('1', 'A', 'We are discussing the plan and next steps.', 11000);
+  assert.equal(t.accept(first, reply(first)), true);
+  assert.equal(t.dirtySince, 4500);
+  assert.ok(t.take(12000)); // No extra four-second wait after completion.
+});
+
+test('late additions are due immediately once the dispatch interval has elapsed', () => {
+  const t = new Tracker(); t.update('1', 'A', 'We are discussing', 0);
+  const first = t.take(4000);
+  t.update('1', 'A', 'We are discussing the plan.', 11500);
+  t.accept(first, reply(first));
+  assert.equal(t.schedule(11500), 0);
+  assert.ok(t.take(12000));
+});
+
+test('the first deadline starts with speech, not with session startup', () => {
+  const t = new Tracker();
+  assert.equal(t.schedule(60000), Infinity);
+  t.update('1', 'A', 'A short utterance.', 60000);
+  assert.equal(t.schedule(60000), 4000);
+  assert.equal(t.take(63999), null);
+  assert.ok(t.take(64000));
+});
+
+test('subsequent deadlines start at dispatch, not at the next change or response', () => {
+  const t = new Tracker(); t.update('1', 'A', 'First.', 0);
+  const first = t.take(4000);
+  t.update('2', 'B', 'Second.', 7000);
+  assert.equal(t.schedule(7000), 1000);
+  assert.equal(t.schedule(7999), 1);
+  assert.equal(t.queuedReason, null);
+  assert.equal(t.schedule(8000), 0);
+  assert.equal(t.queuedReason, 'time');
+  assert.equal(t.lastDispatch, 4000); // Becoming queued is not a dispatch.
+  t.accept(first, reply(first));
+  const second = t.take(10000); assert.ok(second);
+  t.update('3', 'A', 'Third.', 10001);
+  assert.equal(t.schedule(10001), 3999); // Next deadline is 14 s, not 12 s.
+  assert.equal(t.take(13999), null);
+  assert.ok(t.take(14000));
+});
+
+test('a fast response neither resets the deadline nor causes immediate duplicate work', () => {
+  const t = new Tracker(); t.update('1', 'A', 'First.', 0);
+  const first = t.take(4000); t.accept(first, reply(first));
+  assert.equal(t.schedule(4500), Infinity);
+  t.update('2', 'B', 'Second.', 6000);
+  assert.equal(t.schedule(6000), 2000);
+  assert.equal(t.take(7999), null);
+  assert.ok(t.take(8000));
+});
+
+test('one queued update coalesces a long-running request into the freshest contextual window', () => {
+  const t = new Tracker({ overlap: 5 }); t.update('1', 'A', fixture(25), 0);
+  const first = t.take(4000);
+  for (let now = 7000; now <= 19000; now += 1000) {
+    t.update('2', 'B', `The latest revision is ${now}.`, now);
+    assert.equal(t.schedule(now), Math.max(0, 8000 - now));
+    assert.equal(t.counter, 1); // No request snapshots built while the first one runs.
+    assert.equal(t.lastDispatch, 4000);
+  }
+  t.accept(first, reply(first));
+  const next = t.take(20000);
+  assert.equal(next.start, 20); // Compute overlap AFTER accepting the first result.
+  assert.equal(next.window.segments.length, 6);
+  assert.equal(next.window.segments.at(-1).text, 'The latest revision is 19000.');
+  assert.equal(t.counter, 2);
+  assert.equal(t.queuedReason, null);
+  assert.equal(t.schedule(24000), Infinity); // No unchanged duplicate queued during request 2.
+  t.accept(next, reply(next));
+  assert.equal(t.take(30000), null);
+  assert.equal(t.outdated, false);
+});
+
+test('an early volume trigger stays queued while smaller ASR corrections replace its text', () => {
+  const t = new Tracker(); t.update('1', 'A', 'First.', 0);
+  const first = t.take(4000);
+  t.update('2', 'B', 'x'.repeat(501), 4100);
+  assert.equal(t.schedule(4100), 900); // Still respect the one-second dispatch guard.
+  assert.equal(t.schedule(5000), 0);
+  assert.equal(t.queuedReason, 'volume');
+  t.update('2', 'B', 'Corrected short utterance.', 5100);
+  assert.equal(t.schedule(5100), 0);
+  t.accept(first, reply(first));
+  const next = t.take(5500);
+  assert.equal(next.reason, 'volume');
+  assert.equal(next.window.segments.at(-1).text, 'Corrected short utterance.');
+  t.update('3', 'A', 'Third.', 5600);
+  assert.equal(t.schedule(5600), 3900); // Early dispatch also restarts the interval.
+});
+
+test('reverting to the in-flight source cancels the pending slot without a duplicate', () => {
+  const t = new Tracker(); t.update('1', 'A', 'Original.', 0);
+  const first = t.take(4000);
+  t.update('1', 'A', 'Temporary correction.', 7000);
+  assert.equal(t.schedule(8000), 0);
+  t.update('1', 'A', 'Original.', 9000);
+  assert.equal(t.schedule(9000), Infinity);
+  assert.equal(t.queuedReason, null);
+  t.accept(first, reply(first));
+  assert.equal(t.take(10000), null);
+  assert.equal(t.counter, 1);
+});
+
+test('a queued correction that returns to the displayed translation needs no request', () => {
+  const t = new Tracker(); t.update('1', 'A', 'Original.', 0);
+  const first = t.take(4000); t.accept(first, reply(first));
+  t.update('1', 'A', 'Correction.', 7000); const second = t.take(8000);
+  t.update('1', 'A', 'Another correction.', 10000);
+  assert.equal(t.schedule(12000), 0);
+  t.update('1', 'A', 'Original.', 13000);
+  assert.equal(t.schedule(13000), Infinity);
+  assert.equal(t.queuedReason, null);
+  assert.equal(t.accept(second, reply(second)), false);
+  assert.equal(t.take(14000), null);
+  assert.equal(t.lastDispatch, 8000);
+});
+
+test('silence never queues unchanged captions, before or after a response', () => {
+  const t = new Tracker(); t.update('1', 'A', 'Short.', 0);
+  const first = t.take(4000);
+  for (const now of [8000, 12000, 30000]) {
+    assert.equal(t.schedule(now), Infinity);
+    assert.equal(t.take(now), null);
+  }
+  t.accept(first, reply(first));
+  assert.equal(t.schedule(60000), Infinity);
+  assert.equal(t.take(60000), null);
+  t.update('2', 'B', 'After silence.', 60001);
+  assert.ok(t.take(60001));
+});
+
+test('a queued full deletion clears the translation without sending an empty window', () => {
+  const t = new Tracker(); t.update('1', 'A', 'Original.', 0);
+  const first = t.take(4000); t.accept(first, reply(first));
+  t.update('1', 'A', 'Correction.', 7000); const second = t.take(8000);
+  t.update('1', 'A', '', 9000);
+  assert.equal(t.schedule(12000), 0);
+  assert.equal(t.accept(second, reply(second)), false);
+  assert.equal(t.take(13000), null);
+  assert.equal(t.queuedReason, null);
+  assert.equal(t.schedule(13000), Infinity);
+  assert.equal(t.outdated, false);
+  assert.equal(t.counter, 2);
+});
+
+test('repeated in-flight revisions no longer starve the stable translated prefix', () => {
+  const t = new Tracker();
+  t.update('1', 'A', 'This first sentence is stable.', 0);
+  t.update('2', 'B', 'We agreed the price is fifteen', 0);
+  let snapshot = t.take(4000);
+  const revisions = ['We agreed, the price is fifteen', 'We agreed, the price is fifty', 'We agreed the price is fifty'];
+  for (let i = 0; i < revisions.length; i++) {
+    t.update('2', 'B', revisions[i], 5000 + i * 8000);
+    assert.equal(t.accept(snapshot, reply(snapshot)), true);
+    assert.equal(t.view().translation, 'A: RU(This first sentence is stable.)');
+    snapshot = t.take(12000 + i * 8000); assert.ok(snapshot);
+  }
+  t.accept(snapshot, reply(snapshot));
+  assert.match(t.view().translation, /fifty/); assert.equal(t.outdated, false);
+});
 test('pure additions during generation allow provisional result, then catch up', () => {
   const t = fast(); t.update('1', 'A', '始まり', 0); const first = t.take(0);
   t.update('1', 'A', '始まりです。次です。', 2000);
@@ -137,9 +405,9 @@ test('reverted ASR correction does not retranslate an already current source', (
   assert.equal(t.take(9000), null);
   assert.equal(t.dirtySince, null);
   assert.strictEqual(t.translated, translated);
-  // A later real change gets a fresh timer, not the cancelled correction's deadline.
+  // A cancelled correction must not restart the interval from the last actual dispatch.
   t.update('1', 'A', '確定した文章です。次です。', 10000);
-  assert.equal(t.take(13999), null); assert.ok(t.take(14000));
+  assert.ok(t.take(10000));
 });
 
 test('correction reverted during a request resets the sent-source baseline', () => {

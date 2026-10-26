@@ -116,6 +116,97 @@ def translation_instructions(target_language):
     return INSTRUCTIONS + f'\nTARGET LANGUAGE: {TARGET_LANGUAGES[target_language]} ({target_language}).\n'
 
 
+def validate_previous(items, window, context):
+    if items is None:
+        return []
+    if not isinstance(items, list) or len(items) > 20:
+        raise ValueError('Invalid previous translation count')
+    known = {item['id'] for item in context + window['segments']}
+    result, seen, chars = [], set(), 0
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {'id', 'text'}:
+            raise ValueError('Invalid previous translation')
+        ident, text = item['id'], item['text']
+        if not isinstance(ident, str) or ident not in known or ident in seen or \
+                not isinstance(text, str) or not text.strip():
+            raise ValueError('Invalid previous translation anchor')
+        chars += len(text)
+        if chars > 6000:
+            raise ValueError('Previous translations exceed text limit')
+        seen.add(ident)
+        result.append({'id': ident, 'text': text})
+    return result
+
+
+class TranslationStream:
+    """Decode only complete ordered anchors, never raw JSON/token fragments.
+
+    Different root-field ordering simply disables early display; the final reply is
+    still checked normally. Preview is provisional until the entire turn validates.
+    """
+    def __init__(self, window):
+        self.window = window
+        self.buffer = ''
+        self.state = 'header'
+        self.segments = []
+        self.chars = 0
+        self.received = 0
+        self.decoder = json.JSONDecoder()
+
+    def feed(self, delta):
+        if not isinstance(delta, str):
+            raise RuntimeError('Invalid translation stream')
+        self.received += len(delta)
+        if self.received > 1024 * 1024:
+            raise RuntimeError('Translation stream is too large')
+        self.buffer += delta
+        before = len(self.segments)
+        if self.state == 'header':
+            match = re.match(r'\s*\{\s*"windowId"\s*:\s*', self.buffer)
+            if not match:
+                return False
+            try:
+                ident, end = self.decoder.raw_decode(self.buffer, match.end())
+            except json.JSONDecodeError:
+                return False
+            if ident != self.window['id']:
+                raise RuntimeError('Translation window ID does not match')
+            match = re.match(r'\s*,\s*"segments"\s*:\s*\[', self.buffer[end:])
+            if not match:
+                return False
+            self.buffer = self.buffer[end + match.end():]
+            self.state = 'value'
+        while self.state != 'done':
+            self.buffer = self.buffer.lstrip()
+            if not self.buffer:
+                break
+            if self.state == 'separator':
+                if self.buffer.startswith(']'):
+                    self.state = 'done'
+                    break
+                if not self.buffer.startswith(','):
+                    raise RuntimeError('Invalid translation stream separator')
+                self.buffer = self.buffer[1:].lstrip()
+                self.state = 'value'
+            try:
+                item, end = self.decoder.raw_decode(self.buffer)
+            except json.JSONDecodeError:
+                break
+            index = len(self.segments)
+            if not isinstance(item, dict) or set(item) != {'id', 'text'} or \
+                    index >= len(self.window['segments']) or \
+                    item['id'] != self.window['segments'][index]['id'] or \
+                    not isinstance(item['text'], str) or not item['text'].strip():
+                raise RuntimeError('Invalid progressive translation anchor')
+            self.chars += len(item['text'])
+            if self.chars > 96000:
+                raise RuntimeError('Translation is too large')
+            self.segments.append(item)
+            self.buffer = self.buffer[end:]
+            self.state = 'separator'
+        return len(self.segments) > before
+
+
 class Codex:
     def __init__(self):
         self.proc = None
@@ -183,7 +274,7 @@ class Codex:
             finally:
                 self.events.put(None)
         threading.Thread(target=reader, daemon=True).start()
-        self.rpc('initialize', {'clientInfo': {'name': 'meet_improve', 'version': '0.5.1'},
+        self.rpc('initialize', {'clientInfo': {'name': 'meet_improve', 'version': '0.6.0'},
                                'capabilities': {'experimentalApi': True}})
         self.send({'method': 'initialized', 'params': {}})
         account = self.rpc('account/read', {'refreshToken': False}).get('account')
@@ -198,7 +289,7 @@ class Codex:
                 break
         if not found or not any(e['reasoningEffort'] == EFFORT for e in found['supportedReasoningEfforts']):
             raise RuntimeError('gpt-6-luna / low is unavailable. No fallback model will be selected.')
-        return {'model': MODEL, 'effort': EFFORT, 'auth': 'chatgpt', 'protocol': 3}
+        return {'model': MODEL, 'effort': EFFORT, 'auth': 'chatgpt', 'protocol': 4}
 
     def send(self, message):
         self.proc.stdin.write(json.dumps(message, ensure_ascii=False) + '\n')
@@ -262,17 +353,18 @@ class Codex:
         self.thread_language = target_language
         return self.thread
 
-    def translate(self, window, context, target_language):
+    def translate(self, window, context, target_language, previous=None, on_progress=None):
         # Validate before any RPC. One window remains one contextual translation.
         translation_instructions(target_language)
         window = validate_window(window)
         context = validate_segments(context, limit=10, max_chars=6000)
+        previous = validate_previous(previous, window, context)
         try:
             if self.cancelled.is_set():
                 raise RuntimeError('Translation cancelled.')
             thread = self._translation_thread(target_language)
             self.thread_tokens = None
-            result = self._translate_window(thread, window, context)
+            result = self._translate_window(thread, window, context, previous, on_progress)
             self.thread_turns += 1
             return result
         except Exception:
@@ -281,13 +373,20 @@ class Codex:
             self._clear_thread()
             raise
 
-    def _translate_window(self, thread, window, context):
+    def _translate_window(self, thread, window, context, previous, on_progress):
+        payload = {'context': context, 'window': window}
+        if previous:
+            payload['previous'] = previous
         started = self.rpc('turn/start', {'threadId': thread, 'model': MODEL, 'effort': EFFORT,
-            'input': [{'type': 'text', 'text': json.dumps({'context': context, 'window': window}, ensure_ascii=False)}],
+            'input': [{'type': 'text', 'text': json.dumps(payload, ensure_ascii=False)}],
             'outputSchema': SCHEMA})
         turn_id = started['turn']['id']
         deadline = time.monotonic() + 90
         outputs = []
+        stream = TranslationStream(window)
+        stream_item = None
+        progress_count = 0
+        next_progress = 0
         while True:
             event = self.next_event(deadline)
             params = event.get('params', {})
@@ -297,6 +396,20 @@ class Codex:
             event_turn = params.get('turnId') or params.get('turn', {}).get('id')
             if event_turn != turn_id:
                 continue
+            if event.get('method') == 'item/agentMessage/delta' and on_progress:
+                item_id = params.get('itemId')
+                if not isinstance(item_id, str):
+                    continue
+                if stream_item is not None and stream_item != item_id:
+                    raise RuntimeError('Unexpected additional translation message')
+                stream_item = item_id
+                stream.feed(params.get('delta'))
+                now = time.monotonic()
+                if len(stream.segments) > progress_count and (now >= next_progress or
+                        len(stream.segments) == len(window['segments'])):
+                    on_progress({'windowId': window['id'], 'segments': list(stream.segments)})
+                    progress_count = len(stream.segments)
+                    next_progress = now + 0.1
             if event.get('method') == 'thread/tokenUsage/updated':
                 tokens = params.get('tokenUsage', {}).get('last', {}).get('totalTokens')
                 if type(tokens) is int and tokens > 0:
@@ -313,14 +426,14 @@ class Codex:
                     raise RuntimeError('Codex: ' + str((turn.get('error') or {}).get('message', turn['status'])))
                 break
         result = json.loads(outputs[-1] if outputs else '{}')
-        if not isinstance(result, dict) or result.get('windowId') != window['id']:
+        if not isinstance(result, dict) or set(result) != {'windowId', 'segments'} or result.get('windowId') != window['id']:
             raise RuntimeError('Translation window ID does not match')
         segments = result.get('segments')
         if not isinstance(segments, list) or len(segments) != len(window['segments']):
             raise RuntimeError('Incorrect number of translation anchors')
         translated = {}
         for item in segments:
-            if not isinstance(item, dict) or not isinstance(item.get('id'), str):
+            if not isinstance(item, dict) or set(item) != {'id', 'text'} or not isinstance(item.get('id'), str):
                 raise RuntimeError('Invalid translation anchor')
             if item['id'] in translated or not isinstance(item.get('text'), str) or not item['text'].strip():
                 raise RuntimeError('Duplicate anchor or empty translation')
@@ -379,7 +492,7 @@ def run_native():
         first = inbox.get()
         if not isinstance(first, dict) or first.get('type') != 'hello':
             return
-        if first.get('protocol') != 3:
+        if first.get('protocol') != 4:
             raise ValueError('Version mismatch. Reload Meet Improve and restart translation.')
         write_message({'type': 'ready', **engine.start()})
         while True:
@@ -391,7 +504,10 @@ def run_native():
             if not isinstance(message.get('requestId'), int) or isinstance(message['requestId'], bool):
                 raise ValueError('Invalid request ID')
             started = time.monotonic()
-            result = engine.translate(message.get('window'), message.get('context', []), message.get('targetLanguage'))
+            def progress(result):
+                write_message({'type': 'progress', 'requestId': message['requestId'], **result})
+            result = engine.translate(message.get('window'), message.get('context', []), message.get('targetLanguage'),
+                                      message.get('previous'), progress)
             write_message({'type': 'result', 'requestId': message['requestId'], **result,
                            'elapsedMs': round((time.monotonic()-started)*1000)})
     except Exception as exc:

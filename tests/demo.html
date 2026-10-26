@@ -4,9 +4,11 @@
 <h1>Caption test — no OpenAI requests</h1>
 <p>This page uses synthetic captions and mock translations. It does not launch Codex.</p>
 <button id="append">Add caption</button><button id="edit">Correct caption</button><button id="replace">Replace container</button>
+<button id="checks">Run browser checks</button><pre id="check-result"></pre>
 <div role="region" aria-label="Captions"><div class="nMcdL"><span class="NWpY1d">Test participant</span><div class="ygicle">This caption was already visible before starting.</div></div></div>
 <script>
 window.sent = [];
+window.sentAt = [];
 window.connected = false;
 // Capture the closed shadow root ONLY inside this test fixture for assertions.
 const attach = Element.prototype.attachShadow;
@@ -14,9 +16,20 @@ Element.prototype.attachShadow = function(options) { const root = attach.call(th
 window.chrome = {runtime: {connect() {
   let receiver, disconnected, alive = true;
   window.connected = true;
-  setTimeout(() => alive && receiver({type:'ready',protocol:3}), 20);
+  window.deliver = message => alive && receiver(message);
+  setTimeout(() => alive && receiver({type:'ready',protocol:4}), 20);
   return {onMessage:{addListener(fn){receiver=fn;}},onDisconnect:{addListener(fn){disconnected=fn;}},
-    postMessage(message) { window.sent.push(message); const revision=window.sent.length; setTimeout(() => alive && receiver({type:'result',requestId:message.requestId,elapsedMs:80,windowId:message.window.id,segments:message.window.segments.map(x=>({id:x.id,text:'v'+revision+': '+x.text}))}), window.mockDelay ?? 80); },
+    postMessage(message) {
+      window.sent.push(message);
+      window.sentAt.push(performance.now());
+      if (window.mockManual) return;
+      const revision=window.sent.length, delay=window.mockDelay ?? 80;
+      const result = {requestId:message.requestId,windowId:message.window.id,
+        segments:message.window.segments.map(x=>({id:x.id,text:'v'+revision+': '+x.text}))};
+      if (window.mockProgress) setTimeout(() => alive && receiver({type:'progress',...result,
+        segments:result.segments.slice(0,Math.max(1,Math.floor(result.segments.length/2)))}), delay/2);
+      setTimeout(() => alive && receiver({type:'result',elapsedMs:delay,...result}), delay);
+    },
     disconnect(){if(alive){alive=false;window.connected=false;disconnected?.();}}
   };
 }}};
@@ -30,5 +43,7 @@ document.getElementById('append').onclick=()=>add();
 document.getElementById('edit').onclick=()=>{document.querySelector('[role=region]').lastElementChild.querySelector('.ygicle').firstChild.data='今日は修正した機能について説明します。';};
 document.getElementById('replace').onclick=()=>{const root=document.querySelector('[role=region]');root.replaceWith(root.cloneNode(true));};
 </script>
-<script src="../captions.js"></script><script src="../content.js"></script>
+<script src="../captions.js"></script><script src="../panel.js"></script><script src="../content.js"></script>
+<script src="browser-checks.js"></script>
+<script>document.getElementById('checks').onclick=async()=>{try{document.getElementById('check-result').textContent=JSON.stringify(await runBrowserChecks(),null,2);}catch(error){document.getElementById('check-result').textContent=error.stack;}};</script>
 </html>
