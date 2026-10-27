@@ -43,6 +43,8 @@ as unintelligible in the target language. Never invent an ending for unfinished 
 
 OUTPUT ANCHORS
 Return one translated text fragment per input segment.id in the original order.
+Include EVERY current window ID, including unchanged overlapping anchors and IDs present
+in previous. Never omit an anchor as redundant, merge neighboring IDs, or return only new speech.
 These are technical anchors within ONE coherent translation, not independent sentence requests.
 Do not duplicate meaning across neighboring fragments: each fragment replaces its matching
 position in the displayed translation, and new fragments are appended.

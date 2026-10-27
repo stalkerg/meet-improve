@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'native'))
 from host import (read_message, write_message, validate_segments, validate_window, extension_id,
                   Codex, INSTRUCTIONS, TARGET_LANGUAGES, translation_instructions,
-                  MAX_THREAD_TURNS, MAX_THREAD_TOKENS, SCHEMA)
+                  MAX_THREAD_TURNS, MAX_THREAD_TOKENS, translation_schema)
 
 WINDOW = {'id':'window-1','segments':[{'id':'1:0','speaker':'A','text':'はい。'}]}
 
@@ -76,7 +76,9 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(len(starts),2)
         self.assertEqual([p['threadId'] for p in turns],['t1']*MAX_THREAD_TURNS+['t2'])
         self.assertEqual([p for m,p in calls if m=='thread/unsubscribe'],[{'threadId':'t1'}])
-        self.assertTrue(all(p['outputSchema']==SCHEMA for p in turns))
+        for params in turns:
+            current = json.loads(params['input'][0]['text'])['window']
+            self.assertEqual(params['outputSchema'], translation_schema(current))
         self.assertEqual(c.thread_turns,1)
         self.assertEqual(c.thread_tokens,6400)  # Last request, not cumulative usage.
 

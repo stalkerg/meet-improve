@@ -116,6 +116,17 @@ class StreamTests(unittest.TestCase):
         self.assertIsNone(c.thread)
         self.assertEqual(sum(method == 'turn/start' for method, _ in calls), 1)
 
+    def test_missing_final_anchors_never_promote_a_valid_preview(self):
+        c, calls = self.streaming_engine({'windowId': 'window-1', 'segments': []})
+        received = []
+        with self.assertRaisesRegex(RuntimeError, 'expected 1, received 0'):
+            c.translate(WINDOW, [], 'ru', on_progress=received.append)
+        self.assertEqual(len(received), 1)
+        self.assertTrue(c.cancelled.is_set())
+        self.assertIsNone(c.thread)
+        self.assertEqual(c.thread_turns, 0)
+        self.assertEqual(sum(method == 'turn/start' for method, _ in calls), 1)
+
     def test_separate_stream_items_cannot_be_concatenated(self):
         c, _ = native_tests.NativeTests().engine()
         rpc = c.rpc

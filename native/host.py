@@ -2,6 +2,7 @@
 """Private Brave native host. No HTTP listener, API keys or transcript files."""
 import hashlib
 import base64
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,22 @@ SCHEMA = {'type': 'object', 'properties': {
         'id': {'type': 'string'}, 'text': {'type': 'string'}},
         'required': ['id', 'text'], 'additionalProperties': False}}},
     'required': ['windowId', 'segments'], 'additionalProperties': False}
+
+
+def translation_schema(window):
+    # A generic array schema permits a perfectly schema-valid but incomplete reply.
+    # Bind cardinality and identity to THIS turn, including on a reused thread.
+    schema = deepcopy(SCHEMA)
+    schema['properties']['windowId']['enum'] = [window['id']]
+    ids = [item['id'] for item in window['segments']]
+    segments = schema['properties']['segments']
+    segments['minItems'] = segments['maxItems'] = len(ids)
+    # Structured Outputs limits a single enum's string size above 250 values.
+    # Production IDs are short; unusually long valid client IDs still get exact
+    # cardinality, with identity/uniqueness enforced by final validation as before.
+    if len(ids) <= 250 or sum(map(len, ids)) <= 15000:
+        segments['items']['properties']['id']['enum'] = ids
+    return schema
 
 
 def extension_id():
@@ -274,7 +291,7 @@ class Codex:
             finally:
                 self.events.put(None)
         threading.Thread(target=reader, daemon=True).start()
-        self.rpc('initialize', {'clientInfo': {'name': 'meet_improve', 'version': '0.6.0'},
+        self.rpc('initialize', {'clientInfo': {'name': 'meet_improve', 'version': '0.6.1'},
                                'capabilities': {'experimentalApi': True}})
         self.send({'method': 'initialized', 'params': {}})
         account = self.rpc('account/read', {'refreshToken': False}).get('account')
@@ -379,7 +396,7 @@ class Codex:
             payload['previous'] = previous
         started = self.rpc('turn/start', {'threadId': thread, 'model': MODEL, 'effort': EFFORT,
             'input': [{'type': 'text', 'text': json.dumps(payload, ensure_ascii=False)}],
-            'outputSchema': SCHEMA})
+            'outputSchema': translation_schema(window)})
         turn_id = started['turn']['id']
         deadline = time.monotonic() + 90
         outputs = []
@@ -430,7 +447,9 @@ class Codex:
             raise RuntimeError('Translation window ID does not match')
         segments = result.get('segments')
         if not isinstance(segments, list) or len(segments) != len(window['segments']):
-            raise RuntimeError('Incorrect number of translation anchors')
+            received = len(segments) if isinstance(segments, list) else 'non-array'
+            raise RuntimeError(f'Incorrect number of translation anchors '
+                               f'(expected {len(window["segments"])}, received {received}).')
         translated = {}
         for item in segments:
             if not isinstance(item, dict) or set(item) != {'id', 'text'} or not isinstance(item.get('id'), str):

@@ -7,7 +7,7 @@ It uses your existing Codex sign-in with ChatGPT, not a separately billed API ke
 The translator detects the source language automatically, including mixed-language speech.
 Choose only the **target language**. The default is **Russian**.
 
-## Updating to 0.6.0
+## Updating to 0.6.1
 
 1. Click **Stop** in the old panel.
 2. Reload Meet Improve at `brave://extensions/`.
@@ -15,11 +15,20 @@ Choose only the **target language**. The default is **Russian**.
 
 The extension ID remains `kekiclkdaklolmdekdpdiflkhnnnhmpn`.
 You do not need to reinstall the native host unless the project directory has moved.
-Version 0.6.0 uses **native protocol 4** for progressive results and explicit translation
+Version 0.6.1 keeps **native protocol 4** from 0.6.0 for progressive results and explicit translation
 continuity. Reload the extension and refresh Meet together; an old content script or
 background worker will stop with a version-mismatch error rather than mix protocols.
 
-This release adds early provisional display of complete translated anchors, smaller
+Version 0.6.1 fixes an underconstrained output schema: each turn now specifies the exact
+expected number of translated anchors and its window ID, rather than allowing an arbitrary
+array length. Production anchor IDs are also allowlisted in the schema. Context and
+previous translations do not reduce the required output count: the overlapping tail must
+still be returned in full. This applies independently to every turn of a reused thread.
+Final duplicate/identity/count validation and fail-closed behavior are unchanged; missing
+text is never silently filled, dropped or retried. Count errors now include expected and
+received counts without caption text. The native host does not need reinstalling.
+
+Version 0.6.0 introduced early provisional display of complete translated anchors, smaller
 contextual batches, incremental history rendering and local timing diagnostics. It also
 includes the previously local timer, ASR-prefix and draggable-panel improvements.
 The model, reasoning effort, service tier and four-second/500-character triggers are unchanged.
@@ -332,6 +341,13 @@ long unfinished phrases, corrections/deletions, partial results, stale-text hidi
 dispatch-based deadlines, coalescing of queued updates, silence, repeated ASR revisions, no-op ASR changes,
 sentence caching, history limits, native validation, target-language validation,
 thread reuse/rotation, stale-turn filtering, failure handling and prompt boundaries.
+Schema regression tests cover exact generation-time counts (1–512), growing/shrinking
+windows in reused threads, template isolation, enum-size limits, and continued rejection
+of missing, duplicate and foreign anchors without retries or transcript disclosure.
+The 0.6.1 schema was also accepted by Codex CLI 0.164.0 / Luna low / Standard in three
+synthetic English → Russian requests on one reused thread (2 → 4 → 2 anchors); all final
+IDs and streamed prefixes matched the corresponding windows. This is a small integration
+check, not a reproduction or guarantee against every intermittent provider failure.
 Additional tests cover soft request budgets, clause preservation, bounded continuity across
 rotation, every byte split of escaped streamed JSON, preview rollback, incremental counters,
 archived text-node preservation and local timing statistics. The browser fixture checks
@@ -382,5 +398,6 @@ Codex and its authentication are not removed.
 ## References
 
 - [Codex App Server](https://learn.chatgpt.com/docs/app-server)
+- [Structured Outputs schema constraints](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [Codex authentication](https://learn.chatgpt.com/docs/auth)
 - [Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
